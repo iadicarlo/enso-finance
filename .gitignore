@@ -1,0 +1,119 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+
+# Data directories (large files - do not commit)
+data/
+*.nc
+*.zarr
+*.h5
+*.hdf5
+
+# Logs
+logs/
+*.log
+*.out
+*.err
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# uv
+# Keep uv.lock for reproducibility!
+# .uv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Data (large files - NEVER commit NetCDF or large data files)
+data/**/*.nc
+data/**/*.nc4
+data/**/*.h5
+data/**/*.hdf5
+data/**/*.zarr
+data/raw/*.csv
+data/raw/*.xlsx
+data/processed/*.csv
+!data/.gitkeep
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/**/.gitkeep
+# TC intensity monthly data (VERY LARGE - 47GB+)
+data/tc_intensity/monthly/**/*.nc
+data/tc_intensity/monthly/**/*.h5
+
+# Outputs (regeneratable)
+outputs/figures/*.png
+outputs/figures/*.pdf
+outputs/tables/*.csv
+outputs/tables/*.xlsx
+!outputs/.gitkeep
+!outputs/figures/.gitkeep
+!outputs/tables/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# Secrets
+.env
+.env.local
+*.pem
+*.key
+

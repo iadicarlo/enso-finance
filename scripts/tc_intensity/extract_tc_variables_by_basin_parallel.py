@@ -37,7 +37,6 @@ sys.path.insert(0, str(project_root))
 
 # Import our modules
 from src.tc_intensity import (
-    calculate_full_pi,
     interpolate_monthly_to_trajectory,
     calculate_mixed_layer_depth,
     calculate_thermal_stratification,
@@ -45,6 +44,11 @@ from src.tc_intensity import (
     extract_bathymetry_at_location,
     apply_all_physics_constraints
 )
+# Import tcpyPI wrapper for PI calculation (Bister & Emanuel 2002 with true reversible adiabatic CAPE)
+from src.tc_intensity.physics.potential_intensity_tcpyPI import calculate_pi_tcpyPI
+
+# Import pressure levels constants for comprehensive PI calculation
+from scripts.tc_intensity._pressure_levels_constants import ERA5_PI_PRESSURE_LEVELS
 
 # Import data loaders
 from scripts.preprocessing.load_ibtracs_tracks import load_ibtracs_tracks, BASIN_CODES
@@ -54,7 +58,8 @@ from src.data_loaders.cds_era5_monthly_loader import (
 )
 from src.data_loaders.cds_oras5_monthly_loader import (
     load_oras5_monthly,
-    get_ocean_temperature_profile
+    get_ocean_temperature_profile,
+    get_oras5_sst
 )
 
 # Directories
@@ -231,7 +236,7 @@ def extract_all_environmental_variables_at_tc_location(
         # ERA5 uses 'pressure_level' dimension and 'latitude'/'longitude' coordinates
         if 't' in ds_plev.data_vars or 'temperature' in ds_plev.data_vars:
             temp_var = 't' if 't' in ds_plev.data_vars else 'temperature'
-            for plev in [850, 600, 200]:
+            for plev in [850, 600, 250, 200]:
                 if 'pressure_level' in ds_plev[temp_var].dims:
                     plev_idx = int(np.abs(plev_vals - plev).argmin())
                     temp_at_plev = ds_plev[temp_var].isel(valid_time=0, pressure_level=plev_idx, latitude=lat_idx, longitude=lon_idx)
@@ -242,7 +247,7 @@ def extract_all_environmental_variables_at_tc_location(
             u_var = 'u' if 'u' in ds_plev.data_vars else 'u_component_of_wind'
             v_var = 'v' if 'v' in ds_plev.data_vars else 'v_component_of_wind'
             
-            for plev in [850, 200]:
+            for plev in [850, 250, 200]:
                 if 'pressure_level' in ds_plev[u_var].dims:
                     plev_idx = int(np.abs(plev_vals - plev).argmin())
                     u = ds_plev[u_var].isel(valid_time=0, pressure_level=plev_idx, latitude=lat_idx, longitude=lon_idx)
@@ -253,17 +258,57 @@ def extract_all_environmental_variables_at_tc_location(
                     wind_speed = np.sqrt(float(u.values)**2 + float(v.values)**2)
                     variables[f'wind_speed_{plev}'] = wind_speed
         
-        # Calculate wind shear (850-200 hPa)
-        if 'u_850' in variables and 'v_850' in variables and 'u_200' in variables and 'v_200' in variables:
+        # Calculate wind shear (850-250 hPa) - Emanuel 2017 requirement
+        if 'u_850' in variables and 'v_850' in variables and 'u_250' in variables and 'v_250' in variables:
             u850 = variables['u_850']
             v850 = variables['v_850']
-            u200 = variables['u_200']
-            v200 = variables['v_200']
+            u250 = variables['u_250']
+            v250 = variables['v_250']
             
-            wind_shear = np.sqrt((u200 - u850)**2 + (v200 - v850)**2)
+            wind_shear = np.sqrt((u250 - u850)**2 + (v250 - v850)**2)
             variables['wind_shear'] = wind_shear
         
-        # Relative humidity at 600 hPa
+        # Specific humidity at pressure levels (for full PI calculation)
+        # ERA5 uses 'q' for specific humidity
+        if 'q' in ds_plev.data_vars or 'specific_humidity' in ds_plev.data_vars:
+            q_var = 'q' if 'q' in ds_plev.data_vars else 'specific_humidity'
+            if 'pressure_level' in ds_plev[q_var].dims:
+                for plev in [850, 600, 200]:
+                    plev_idx = int(np.abs(plev_vals - plev).argmin())
+                    q_at_plev = ds_plev[q_var].isel(valid_time=0, pressure_level=plev_idx, latitude=lat_idx, longitude=lon_idx)
+                    variables[f'specific_humidity_{plev}'] = float(q_at_plev.values)
+        
+        # Extract FULL comprehensive profiles for PI calculation (all 29 levels: 1000-50 hPa)
+        # This is required for accurate PI calculation with tcpyPI
+        if 't' in ds_plev.data_vars or 'temperature' in ds_plev.data_vars:
+            temp_var = 't' if 't' in ds_plev.data_vars else 'temperature'
+            if 'q' in ds_plev.data_vars or 'specific_humidity' in ds_plev.data_vars:
+                q_var = 'q' if 'q' in ds_plev.data_vars else 'specific_humidity'
+                if 'pressure_level' in ds_plev[temp_var].dims and 'pressure_level' in ds_plev[q_var].dims:
+                    # Extract full profiles for PI calculation
+                    temp_profile_pi = []
+                    q_profile_pi = []
+                    plevs_pi = []
+                    
+                    for plev in ERA5_PI_PRESSURE_LEVELS:
+                        # Find nearest available level in dataset
+                        plev_idx = int(np.abs(plev_vals - plev).argmin())
+                        actual_plev = float(plev_vals[plev_idx])
+                        
+                        # Extract temperature and humidity at this level
+                        temp_at_plev = ds_plev[temp_var].isel(valid_time=0, pressure_level=plev_idx, latitude=lat_idx, longitude=lon_idx)
+                        q_at_plev = ds_plev[q_var].isel(valid_time=0, pressure_level=plev_idx, latitude=lat_idx, longitude=lon_idx)
+                        
+                        temp_profile_pi.append(float(temp_at_plev.values))
+                        q_profile_pi.append(float(q_at_plev.values))
+                        plevs_pi.append(actual_plev)
+                    
+                    # Store full profiles for PI calculation (as lists, will convert to arrays in PI section)
+                    variables['_temperature_profile_pi'] = temp_profile_pi
+                    variables['_specific_humidity_profile_pi'] = q_profile_pi
+                    variables['_pressure_levels_pi'] = plevs_pi
+        
+        # Relative humidity at 600 hPa (keep for backward compatibility if needed)
         if 'r' in ds_plev.data_vars or 'relative_humidity' in ds_plev.data_vars:
             rh_var = 'r' if 'r' in ds_plev.data_vars else 'relative_humidity'
             if 'pressure_level' in ds_plev[rh_var].dims:
@@ -294,38 +339,154 @@ def extract_all_environmental_variables_at_tc_location(
         lat_idx = int(np.abs(lat_vals - lat).argmin())
         lon_idx = int(np.abs(lon_vals - lon).argmin())
         
-        # SST
-        # ERA5 single-level uses 'latitude'/'longitude' coordinates
-        if 'sst' in ds_sl.data_vars or 'sea_surface_temperature' in ds_sl.data_vars:
-            sst_var = 'sst' if 'sst' in ds_sl.data_vars else 'sea_surface_temperature'
-            sst = ds_sl[sst_var].isel(valid_time=0, latitude=lat_idx, longitude=lon_idx)
-            variables['sst'] = float(sst.values)
-        
         # Surface pressure
         if 'sp' in ds_sl.data_vars or 'surface_pressure' in ds_sl.data_vars:
             ps_var = 'sp' if 'sp' in ds_sl.data_vars else 'surface_pressure'
             ps = ds_sl[ps_var].isel(valid_time=0, latitude=lat_idx, longitude=lon_idx)
             variables['surface_pressure'] = float(ps.values)
     
-    # 3. Calculate PI (simplified)
-    if 'sst' in variables:
-        sst_c = variables['sst']
-        pi_simplified = 70.0 * np.sqrt(max((sst_c - 26.5) / 26.5, 0.0))
-        variables['pi'] = pi_simplified
+    # 2.5. Extract SST from ORAS5 (PREFERRED - ocean reanalysis, more accurate)
+    # ORAS5 SST is extracted from surface level of ocean temperature (more accurate than ERA5 atmospheric estimate)
+    # Fall back to ERA5 SST if ORAS5 is not available
+    if 'sst' not in variables and oras5_dataset is not None:
+        try:
+            oras5_file = DATA_DIR / 'oras5' / f'oras5_monthly_{time.year}_{time.month:02d}.nc'
+            if oras5_file.exists():
+                sst_celsius = get_oras5_sst(oras5_file, lat, lon)
+                if sst_celsius is not None:
+                    # Convert from Celsius to Kelvin for consistency with other temperature variables
+                    variables['sst'] = sst_celsius + 273.15
+        except Exception as e:
+            pass  # Silent fail, will try ERA5 SST as fallback
+    
+    # 2.6. Fallback: Extract SST from ERA5 (atmospheric model estimate - less accurate)
+    # Only use if ORAS5 SST extraction failed or ORAS5 data is not available
+    if 'sst' not in variables and 'single_level' in era5_datasets:
+        ds_sl = era5_datasets['single_level']
+        
+        # Use pre-computed coordinate arrays (thread-safe)
+        cache_key_sl = (time.year, time.month, 'sl_coords')
+        with _coord_cache_lock:
+            if cache_key_sl not in _coordinate_cache:
+                _coordinate_cache[cache_key_sl] = {
+                    'lat': np.array(ds_sl.latitude.values).copy(),
+                    'lon': np.array(ds_sl.longitude.values).copy()
+                }
+            coords = _coordinate_cache[cache_key_sl]
+        
+        lat_vals = coords['lat']
+        lon_vals = coords['lon']
+        lat_idx = int(np.abs(lat_vals - lat).argmin())
+        lon_idx = int(np.abs(lon_vals - lon).argmin())
+        
+        # SST from ERA5 (atmospheric model estimate)
+        # NOTE: Store in Kelvin for consistency with other temperature variables and FAST model requirements
+        if 'sst' in ds_sl.data_vars or 'sea_surface_temperature' in ds_sl.data_vars:
+            sst_var = 'sst' if 'sst' in ds_sl.data_vars else 'sea_surface_temperature'
+            sst_kelvin = ds_sl[sst_var].isel(valid_time=0, latitude=lat_idx, longitude=lon_idx)
+            # Store in Kelvin (consistent with temperature profiles and FAST model)
+            variables['sst'] = float(sst_kelvin.values)
+    
+    # 3. Calculate PI using tcpyPI (Bister & Emanuel 2002 with true reversible adiabatic CAPE)
+    # Uses peer-reviewed pyPI implementation with full reversible adiabatic parcel lifting
+    # REQUIRES comprehensive pressure level profiles (29 levels: 1000-50 hPa) for accurate calculation
+    if 'sst' in variables and 'surface_pressure' in variables:
+        sst_k = variables['sst']  # Now in Kelvin
+        
+        # Check if we have full comprehensive profiles for PI calculation (preferred)
+        has_full_profiles = (
+            '_temperature_profile_pi' in variables and
+            '_specific_humidity_profile_pi' in variables and
+            '_pressure_levels_pi' in variables
+        )
+        
+        if has_full_profiles:
+            # Use comprehensive profiles (29 levels: 1000-50 hPa) for accurate PI calculation
+            temperature_profile = np.array(variables['_temperature_profile_pi'])
+            specific_humidity_profile = np.array(variables['_specific_humidity_profile_pi'])
+            pressure_levels = np.array(variables['_pressure_levels_pi']) * 100.0  # Convert hPa to Pa
+            
+            # Clean up temporary profile variables (not needed in output CSV)
+            del variables['_temperature_profile_pi']
+            del variables['_specific_humidity_profile_pi']
+            del variables['_pressure_levels_pi']
+            
+            # Use tcpyPI (Bister & Emanuel 2002) - true reversible adiabatic CAPE calculation
+            try:
+                variables['pi'] = calculate_pi_tcpyPI(
+                    sst_k=sst_k,
+                    surface_pressure=variables['surface_pressure'],
+                    temperature_profile=temperature_profile,
+                    pressure_levels=pressure_levels,
+                    specific_humidity_profile=specific_humidity_profile
+                    # Wrapper handles all unit conversions automatically (Pa→hPa, K→°C, kg/kg→g/kg)
+                )
+            except Exception as e:
+                # If PI calculation fails, set to NaN
+                warnings.warn(f"PI calculation (tcpyPI) with full profile failed: {e}. Setting PI to NaN.")
+                variables['pi'] = np.nan
+        
+        else:
+            # Fallback: Check if we have basic 3-level profiles (for backward compatibility)
+            has_temp_profiles = all(
+                f'temperature_{plev}' in variables 
+                for plev in [850, 600, 200]
+            )
+            has_q_profiles = all(
+                f'specific_humidity_{plev}' in variables 
+                for plev in [850, 600, 200]
+            )
+            
+            if has_temp_profiles and has_q_profiles:
+                # Use basic 3-level profiles (less accurate, but better than nothing)
+                warnings.warn("Using basic 3-level profile for PI calculation. Results will be less accurate. Consider extracting full profiles.")
+                temperature_profile = np.array([
+                    variables['temperature_850'],
+                    variables['temperature_600'],
+                    variables['temperature_200']
+                ])
+                specific_humidity_profile = np.array([
+                    variables['specific_humidity_850'],
+                    variables['specific_humidity_600'],
+                    variables['specific_humidity_200']
+                ])
+                pressure_levels = np.array([85000.0, 60000.0, 20000.0])  # Pa (will be converted to hPa by wrapper)
+                
+                try:
+                    variables['pi'] = calculate_pi_tcpyPI(
+                        sst_k=sst_k,
+                        surface_pressure=variables['surface_pressure'],
+                        temperature_profile=temperature_profile,
+                        pressure_levels=pressure_levels,
+                        specific_humidity_profile=specific_humidity_profile
+                    )
+                except Exception as e:
+                    warnings.warn(f"PI calculation (tcpyPI) with basic profile failed: {e}. Setting PI to NaN.")
+                    variables['pi'] = np.nan
+            else:
+                # Missing required data for PI calculation
+                missing = []
+                if not has_temp_profiles:
+                    missing.append("temperature profiles")
+                if not has_q_profiles:
+                    missing.append("specific humidity profiles")
+                warnings.warn(f"Cannot calculate PI - missing: {', '.join(missing)}. Setting PI to NaN.")
+                variables['pi'] = np.nan
     
     # 4. Extract ocean temperature profile from ORAS5 for MLD
     if oras5_dataset is not None:
         try:
-            temp_profile = get_ocean_temperature_profile(
-                DATA_DIR / 'oras5' / f'oras5_monthly_{time.year}_{time.month:02d}.nc',
-                lat, lon
-            )
+            oras5_file = DATA_DIR / 'oras5' / f'oras5_monthly_{time.year}_{time.month:02d}.nc'
+            temp_profile = get_ocean_temperature_profile(oras5_file, lat, lon)
             
             if temp_profile and 'temperature' in temp_profile:
                 if 'sst' in variables:
+                    # MLD calculation expects SST in same units as ocean temperature (Celsius)
+                    # variables['sst'] is stored in Kelvin, convert to Celsius
+                    sst_celsius = variables['sst'] - 273.15
                     mld = calculate_mixed_layer_depth(
                         ocean_temperature=temp_profile['temperature'],
-                        sst=variables['sst'],
+                        sst=sst_celsius,
                         depth_coord=temp_profile['depth']
                     )
                     variables['mixed_layer_depth'] = float(mld)
