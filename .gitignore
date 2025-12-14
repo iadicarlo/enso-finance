@@ -97,9 +97,22 @@ outputs/figures/*.png
 outputs/figures/*.pdf
 outputs/tables/*.csv
 outputs/tables/*.xlsx
+outputs/tc_intensity/*.csv
+outputs/processed_data/*.nc
 !outputs/.gitkeep
 !outputs/figures/.gitkeep
 !outputs/tables/.gitkeep
+
+# Status/documentation files (temporary working files)
+*.md
+!README.md
+!docs/**/*.md
+!.github/**/*.md
+*.txt
+*.log
+.env.sh
+.python-version
+sitecustomize.py
 
 # OS
 .DS_Store
@@ -117,3 +130,18 @@ htmlcov/
 *.pem
 *.key
 
+# Outputs with large files
+outputs/tc_intensity/*.csv
+outputs/processed_data/*.nc
+
+# Temporary status/documentation files (don't commit these)
+*.md
+!README.md
+!docs/**/*.md
+*.txt
+*.log
+.env.sh
+.python-version
+sitecustomize.py
+PET0.ESMF_LogFile
+verification_report.txt
