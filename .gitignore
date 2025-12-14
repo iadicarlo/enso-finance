@@ -103,17 +103,6 @@ outputs/processed_data/*.nc
 !outputs/figures/.gitkeep
 !outputs/tables/.gitkeep
 
-# Status/documentation files (temporary working files)
-*.md
-!README.md
-!docs/**/*.md
-!.github/**/*.md
-*.txt
-*.log
-.env.sh
-.python-version
-sitecustomize.py
-
 # OS
 .DS_Store
 Thumbs.db
