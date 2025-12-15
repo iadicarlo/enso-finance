@@ -109,44 +109,71 @@ def test_tc_tracks():
         return None
 
 
-def test_variable_extraction(tracks, num_tests=5):
-    """Test extracting variables for a few TC observations."""
+def test_variable_extraction(tracks, num_tests=20, only_29_level_files=True):
+    """Test extracting variables for TC observations - only using files with 29 levels."""
     print("\n" + "=" * 70)
     print(f"TEST 3: EXTRACTING VARIABLES ({num_tests} test cases)")
+    print(f"        Only testing files with 29 pressure levels: {only_29_level_files}")
     print("=" * 70)
     
     if tracks is None or len(tracks) == 0:
         print("❌ No track data available for testing")
         return []
     
-    # Filter to years where we have data
-    # We have 1980-2020 files, but check what's actually available
-    available_years = set()
+    # Identify files with 29 levels
     era5_dir = project_root / 'data' / 'tc_intensity' / 'monthly' / 'era5' / 'pressure_levels'
+    good_files = {}  # {(year, month): file_path}
+    
     if era5_dir.exists():
+        import xarray as xr
+        print(f"\n🔍 Scanning ERA5 files for 29-level files...")
         for f in era5_dir.glob("era5_monthly_plev_*.nc"):
             parts = f.stem.split('_')
             if len(parts) >= 4:
                 try:
                     year = int(parts[-2])
-                    available_years.add(year)
+                    month = int(parts[-1])
+                    # Check if file has 29 levels
+                    try:
+                        ds = xr.open_dataset(f)
+                        if 'pressure_level' in ds.dims:
+                            levels = len(ds.pressure_level)
+                            if levels >= 29:
+                                good_files[(year, month)] = f
+                        ds.close()
+                    except:
+                        pass  # Skip files that can't be read
                 except:
                     pass
+        
+        print(f"   ✅ Found {len(good_files)} files with 29 levels")
     
-    print(f"\n📅 Years with ERA5 data: {sorted(available_years)}")
-    
-    # Filter tracks to available years
-    tracks['year'] = pd.to_datetime(tracks['time']).dt.year
-    tracks['month'] = pd.to_datetime(tracks['time']).dt.month
-    test_tracks = tracks[tracks['year'].isin(available_years)].copy()
-    
-    if len(test_tracks) == 0:
-        print("❌ No tracks in available years")
+    if only_29_level_files and len(good_files) == 0:
+        print("❌ No files with 29 levels found!")
         return []
     
-    print(f"   Tracks in available years: {len(test_tracks)}")
+    # Filter tracks to available years/months with good files
+    tracks['year'] = pd.to_datetime(tracks['time']).dt.year
+    tracks['month'] = pd.to_datetime(tracks['time']).dt.month
     
-    # Select a few diverse test cases
+    if only_29_level_files:
+        # Only keep tracks where we have good files
+        tracks['has_good_file'] = tracks.apply(
+            lambda row: (row['year'], row['month']) in good_files, axis=1
+        )
+        test_tracks = tracks[tracks['has_good_file']].copy()
+        print(f"   Tracks with 29-level files available: {len(test_tracks)}")
+    else:
+        # Use all tracks in available years
+        available_years = set(y for y, m in good_files.keys())
+        test_tracks = tracks[tracks['year'].isin(available_years)].copy()
+        print(f"   Tracks in available years: {len(test_tracks)}")
+    
+    if len(test_tracks) == 0:
+        print("❌ No tracks with valid files")
+        return []
+    
+    # Select diverse test cases (diverse years, months, basins)
     test_cases = test_tracks.sample(min(num_tests, len(test_tracks)), random_state=42)
     
     results = []
@@ -158,6 +185,12 @@ def test_variable_extraction(tracks, num_tests=5):
         time = pd.to_datetime(obs['time'])
         year = time.year
         month = time.month
+        
+        # Verify file has 29 levels before testing
+        if only_29_level_files:
+            if (year, month) not in good_files:
+                print(f"   ⚠️  Skipping {year}/{month:02d} (file doesn't have 29 levels)")
+                continue
         
         try:
             # Load monthly grids
@@ -358,8 +391,8 @@ def main():
     # Test 2: Load tracks
     tracks = test_tc_tracks()
     
-    # Test 3: Extract variables
-    extraction_results = test_variable_extraction(tracks, num_tests=5)
+    # Test 3: Extract variables - test 20 cases with only 29-level files
+    extraction_results = test_variable_extraction(tracks, num_tests=20, only_29_level_files=True)
     
     # Test 4: PI calculation
     test_pi_calculation()
